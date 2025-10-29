@@ -1,0 +1,8 @@
+PySide6>=6.6
+pyqtgraph>=0.13
+numpy>=1.24
+fastapi>=0.110
+uvicorn[standard]>=0.22
+aiohttp>=3.9
+asyncpg>=0.29
+python-dotenv>=1.0
