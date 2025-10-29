@@ -1,0 +1,1250 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FH Terminal v 1.3</title>
+    <style>
+      :root[data-theme='dark'] {
+        --bg: #0e1116;
+        --bg-2: #111827;
+        --border: #1f2937;
+        --text: #cfd8e3;
+        --muted: #94a3b8;
+        --panel: rgba(17,24,39,0.9);
+        --panel-border: #334155;
+        --legend-bg: rgba(0,0,0,0.45);
+        --grid: #111827;
+      }
+      :root[data-theme='light'] {
+        --bg: #ffffff;
+        --bg-2: #f3f4f6;
+        --border: #e5e7eb;
+        --text: #111827;
+        --muted: #374151;
+        --panel: rgba(255,255,255,0.95);
+        --panel-border: #d1d5db;
+        --legend-bg: rgba(255,255,255,0.85);
+        --grid: #e5e7eb;
+      }
+      html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      #app { height: 100%; display: flex; flex-direction: column; }
+      header { padding: 8px 12px; background: var(--bg-2); border-bottom: 1px solid var(--border); display:flex; gap:12px; align-items:center; }
+      .spacer { flex:1; }
+      #chart { flex: 1; position: relative; }
+  .legend { position: absolute; top: 8px; left: 8px; background: var(--legend-bg); padding: 6px 8px; border-radius: 6px; font-size: 12px; }
+    /* Overlays order: DOM (3) < Footprint (4) < Drawings (5) */
+    .dom-overlay { position: absolute; top: 0; bottom: 0; right: 0; width: 100%; pointer-events: none; z-index: 3; }
+    canvas.fp-canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; z-index: 4; pointer-events: none; }
+      canvas.dom-canvas { width: 100% !important; height: 100% !important; display: block; }
+      select, button { background: var(--bg); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; padding: 6px 8px; }
+      /* Drawing toolbar */
+  .tv-toolbar { position: absolute; top: 16px; left: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+      .tv-btn { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; border: 1px solid var(--panel-border); background: var(--panel); cursor: pointer; }
+      .tv-btn.active { outline: 2px solid #22c55e; }
+      .tv-btn svg { width: 20px; height: 20px; stroke: var(--muted); }
+      canvas.draw-canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; z-index: 5; }
+      /* Style panel */
+      .style-panel-wrap { position: absolute; top: 16px; right: 16px; z-index: 11; }
+      .style-panel { display:none; margin-top: 8px; padding:8px; background: var(--panel); border:1px solid var(--panel-border); border-radius: 8px; min-width: 220px; color: var(--text); }
+      .style-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0; }
+      .style-row label { font-size: 12px; color: var(--muted); }
+      .style-row input[type='color'] { width: 32px; height: 28px; border: 1px solid var(--panel-border); border-radius: 4px; padding:0; background: transparent; }
+      .style-row input[type='range'] { width: 120px; }
+      .style-row select { width: 120px; }
+      .style-toggle { padding:6px 10px; }
+      .handle { pointer-events: none; }
+    </style>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.development.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <div><strong>Trading Pair: Monero/Tether</strong></div>
+        <label>Timeframe:
+          <select id="tf">
+            <option value="1m" selected>1m</option>
+            <option value="3m">3m</option>
+            <option value="5m">5m</option>
+            <option value="15m">15m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+          </select>
+        </label>
+        <label style="margin-left:10px;">Style:
+          <select id="styleSel">
+            <option value="candles" selected>Candles</option>
+            <option value="hollow">Hollow</option>
+            <option value="bars">H/L Bars</option>
+            <option value="line">Line</option>
+          </select>
+        </label>
+        <div class="spacer"></div>
+        <button id="resetView">Reset View</button>
+  <button id="themeToggle" title="Toggle theme">Dark</button>
+  <button id="styleBtn" class="style-toggle" title="Drawing style">Style</button>
+        <label style="margin-left:8px; display:flex; align-items:center; gap:6px;">
+          <span id="domStatus" style="font-size:12px; color: var(--muted);">DOM: connecting…</span>
+          <button id="domToggle" title="Toggle DOM overlay">On</button>
+          <select id="domTick">
+            <option value="0.01">0.01</option>
+            <option value="0.05">0.05</option>
+            <option value="0.10" selected>0.10</option>
+            <option value="0.20">0.20</option>
+            <option value="0.25">0.25</option>
+            <option value="0.50">0.50</option>
+            <option value="1.00">1.00</option>
+          </select>
+          <label style="display:inline-flex; align-items:center; gap:4px; font-size:12px; color: var(--muted);">
+            <input type="checkbox" id="domVisibleOnly" checked /> Visible only
+          </label>
+          <span style="margin-left:8px; font-size:12px; color: var(--muted);">FP:</span>
+          <button id="fpToggle" title="Toggle Footprint overlay">Off</button>
+        </label>
+      </header>
+      <div id="chart">
+        <div class="legend" id="legend"></div>
+        <!-- Chart info overlay (top-left) -->
+  <div id="chartInfo" style="position:absolute; top:8px; left:8px; z-index:6; display:flex; flex-direction:column; gap:6px; background: transparent; padding:6px 8px; border-radius:6px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span id="symLabel" style="font-weight:600;">XMRUSDT Perpetual Contract:</span>
+            <span id="ohlcvLabel" style="font-variant-numeric: tabular-nums;">O — H — L — C — V</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <button id="bestBidBtn" style="min-width:68px; padding:2px 8px; border-radius:6px; border:1px solid var(--panel-border); background: transparent; color:#ef4444; font-variant-numeric: tabular-nums;">—</button>
+            <span id="spreadLabel" style="font-size:12px; color:var(--muted); min-width:60px; text-align:center; font-variant-numeric: tabular-nums;">—</span>
+            <button id="bestAskBtn" style="min-width:68px; padding:2px 8px; border-radius:6px; border:1px solid var(--panel-border); background: transparent; color:#10b981; font-variant-numeric: tabular-nums;">—</button>
+          </div>
+        </div>
+        <!-- Drawing toolbar -->
+        <div class="tv-toolbar" id="toolbar">
+          <div class="tv-btn" data-tool="cursor" title="Cursor">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 3l7 17 2-6 6-2L4 3z" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="line" title="Trend Line">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 20L20 4" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="ray" title="Ray">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 20L12 12" stroke-width="2"/><path d="M12 12l8-8" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="hline" title="Horizontal Line">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h18" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="vline" title="Vertical Line">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v18" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="rect" title="Rectangle">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="path" title="Path">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 18c4-8 12-8 16-12" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="text" title="Text">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 6h12M12 6v12" stroke-width="2"/></svg>
+          </div>
+          <div class="tv-btn" data-tool="clear" title="Clear drawings">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M10 11v6M14 11v6M6 7l1-2h10l1 2M6 7l1 12h10l1-12" stroke-width="2"/></svg>
+          </div>
+        </div>
+        <canvas id="drawCanvas" class="draw-canvas"></canvas>
+  <canvas id="fpCanvas" class="fp-canvas"></canvas>
+        <div class="dom-overlay"><canvas id="domCanvas" class="dom-canvas"></canvas></div>
+        <!-- Style Panel -->
+        <div class="style-panel-wrap" id="styleWrap">
+          <div class="style-panel" id="stylePanel">
+            <div class="style-row">
+              <label>Stroke</label>
+              <input type="color" id="strokeColorInp" value="#22c55e" />
+            </div>
+            <div class="style-row">
+              <label>Fill</label>
+              <input type="color" id="fillColorInp" value="#22c55e" />
+            </div>
+            <div class="style-row">
+              <label>Opacity</label>
+              <input type="range" id="opacityInp" min="0" max="1" step="0.05" value="0.2" />
+            </div>
+            <div class="style-row">
+              <label>Width</label>
+              <select id="widthInp">
+                <option>1</option>
+                <option selected>2</option>
+                <option>3</option>
+                <option>4</option>
+                <option>5</option>
+              </select>
+            </div>
+            <div class="style-row">
+              <label>Dash</label>
+              <select id="dashInp">
+                <option value="solid" selected>Solid</option>
+                <option value="dash">Dash</option>
+                <option value="dot">Dot</option>
+              </select>
+            </div>
+            <div class="style-row" style="justify-content:flex-end;">
+              <small style="color:var(--muted)">Edits selected drawing, otherwise sets defaults</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const $ = (q) => document.querySelector(q);
+      const legend = $('#legend');
+      const tfSel = $('#tf');
+  const chartInfo = document.getElementById('chartInfo');
+  const toolbarEl = document.getElementById('toolbar');
+  const fpCanvas = $('#fpCanvas');
+  const fpCtx = fpCanvas.getContext('2d');
+  const domCanvas = $('#domCanvas');
+    const domCtx = domCanvas.getContext('2d');
+  const drawCanvas = $('#drawCanvas');
+  const drawCtx = drawCanvas.getContext('2d');
+    const stylePanel = $('#stylePanel');
+    const styleBtn = $('#styleBtn');
+    const themeToggle = $('#themeToggle');
+    const strokeColorInp = $('#strokeColorInp');
+    const fillColorInp = $('#fillColorInp');
+    const opacityInp = $('#opacityInp');
+    const widthInp = $('#widthInp');
+    const dashInp = $('#dashInp');
+  let domState = { mid: null, bids: [], asks: [] };
+  let domEnabled = true;
+  let domTickSize = 0.10;
+  let domDebug = false; // set true to show bucket labels
+  let domVisibleOnly = true;
+  // Info bar state
+  const symLabel = document.getElementById('symLabel');
+  const ohlcvLabel = document.getElementById('ohlcvLabel');
+  const bestBidBtn = document.getElementById('bestBidBtn');
+  const bestAskBtn = document.getElementById('bestAskBtn');
+  const spreadLabel = document.getElementById('spreadLabel');
+
+  // ===== Footprint demo state =====
+  let fpEnabled = false;
+  const TICK_BY_TF = { '1m':0.01, '3m':0.05, '5m':0.10, '15m':0.20, '30m':0.30, '1h':0.50, '4h':1.00 };
+  let currentBars = []; // holds latest OHLC bars for rendering context
+  const barsByTime = new Map(); // time -> full bar (incl volume)
+  const fpCache = new Map(); // key `${tf}:${tick}:${time}` -> { p0, tick, rows:[[i,b,a],...] }
+  // latest fetched footprint columns per time
+  const fpByTime = new Map(); // time -> { p0, tick, rows }
+
+      // Resize canvas to container size
+      function fitCanvasToParent(canvas) {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.floor(rect.width * dpr);
+        canvas.height = Math.floor(rect.height * dpr);
+        canvas.style.width = rect.width + 'px';
+        canvas.style.height = rect.height + 'px';
+        return dpr;
+      }
+
+      // Aggregate DOM by tick size using floor for bids and ceil for asks
+      function aggregateDOM(bids, asks, tick) {
+        const bmap = new Map();
+        const amap = new Map();
+        const t = Number(tick);
+        for (const [ps, qs] of bids) {
+          const p = parseFloat(ps), q = parseFloat(qs); if (!isFinite(p) || !isFinite(q)) continue;
+          const bucket = Math.floor(p / t) * t;
+          bmap.set(bucket, (bmap.get(bucket) || 0) + q);
+        }
+        for (const [ps, qs] of asks) {
+          const p = parseFloat(ps), q = parseFloat(qs); if (!isFinite(p) || !isFinite(q)) continue;
+          const bucket = Math.ceil(p / t) * t;
+          amap.set(bucket, (amap.get(bucket) || 0) + q);
+        }
+        const b = Array.from(bmap.entries()).sort((a,b)=>b[0]-a[0]); // high->low
+        const a = Array.from(amap.entries()).sort((a,b)=>a[0]-b[0]); // low->high
+        return { bids: b, asks: a };
+      }
+
+      // Render DOM as price-aligned bars behind candles
+      function renderDOM() {
+        const dpr = fitCanvasToParent(domCanvas);
+        const ctx = domCtx;
+        ctx.clearRect(0,0,domCanvas.width, domCanvas.height);
+        // Use CSS pixels by scaling the context
+        const cssW = domCanvas.width / dpr;
+        const cssH = domCanvas.height / dpr;
+        // Compute right price scale width if available, and position overlay immediately to its left
+        let priceScaleWidth = 0;
+        try {
+          if (candleSeries && typeof candleSeries.priceScale === 'function') {
+            const ps = candleSeries.priceScale();
+            if (ps && typeof ps.width === 'function') priceScaleWidth = ps.width() || 0;
+          }
+        } catch {}
+        const chartAreaW = Math.max(0, cssW - priceScaleWidth);
+        const overlayPct = 0.10; // 10% after the price panel
+        const widthPx = Math.floor(chartAreaW * overlayPct);
+        const xStart = Math.max(0, cssW - priceScaleWidth - widthPx);
+        // No shaded background; keep overlay fully transparent except the bars/lines
+        if (!domEnabled) return;
+        if ((!domState.bids?.length) && (!domState.asks?.length)) return;
+        if (typeof candleSeries?.priceToCoordinate !== 'function') return;
+
+        // Aggregate
+  const agg = aggregateDOM(domState.bids, domState.asks, domTickSize);
+
+        function yOfPrice(price) { return candleSeries.priceToCoordinate(price); }
+        function barColor(type, v) {
+          // v in [0,1] -> intensity via alpha; higher volume => darker
+          const alpha = 0.12 + 0.58*v;
+          if (type==='bid') return `rgba(16, 185, 129, ${alpha})`;
+          return `rgba(239, 68, 68, ${alpha})`;
+        }
+
+  // Determine visible price window (approximate via top/bottom pixel->price)
+  const topPrice = candleSeries.coordinateToPrice(0);
+  const botPrice = candleSeries.coordinateToPrice(cssH);
+  const loPrice = Math.min(topPrice ?? -Infinity, botPrice ?? Infinity);
+  const hiPrice = Math.max(topPrice ?? Infinity, botPrice ?? -Infinity);
+
+        // Compute max quantity only for visible buckets to improve contrast
+        let maxQty = 1e-9;
+        let dbgCount = 0;
+        for (const [price, qty] of agg.asks) {
+          if (domVisibleOnly) {
+            const pHi = price, pLo = price - domTickSize; if (!(pLo <= hiPrice && pHi >= loPrice)) continue;
+          }
+          maxQty = Math.max(maxQty, qty);
+        }
+        for (const [price, qty] of agg.bids) {
+          if (domVisibleOnly) {
+            const pHi = price + domTickSize, pLo = price; if (!(pLo <= hiPrice && pHi >= loPrice)) continue;
+          }
+          maxQty = Math.max(maxQty, qty);
+        }
+
+        ctx.save(); ctx.scale(dpr, dpr);
+        // Draw asks (above mid), then bids (below mid). Each tick bucket spans from price to price +/- tick
+        let drawn = 0;
+        for (const [price, qty] of agg.asks) {
+          // Bucket [price - tick, price]
+          const pHi = price; const pLo = price - domTickSize;
+          if (!isFinite(pHi) || !isFinite(pLo)) continue;
+          if (domVisibleOnly && !(pLo <= hiPrice && pHi >= loPrice)) continue; // skip if outside visible range
+          const y1 = yOfPrice(pHi); const y2 = yOfPrice(pLo);
+          if (y1==null || y2==null) continue;
+          const top = Math.min(y1, y2), bot = Math.max(y1, y2);
+          const v = Math.min(1, qty / maxQty);
+          const w = Math.max(2, widthPx); // constant width, full overlay
+          const yTop = Math.max(0, top), yBot = Math.min(cssH, bot);
+          if (yBot > yTop) {
+            ctx.fillStyle = barColor('ask', v); ctx.fillRect(xStart, yTop, w, Math.max(1, yBot-yTop-1)); drawn++;
+            if (domDebug && dbgCount < 3) { ctx.fillStyle = '#f87171'; ctx.font='11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif'; ctx.fillText(`${price.toFixed ? price.toFixed(2):price} • ${qty.toFixed ? qty.toFixed(2):qty}`, xStart+4, yTop+12); dbgCount++; }
+          }
+        }
+        dbgCount = 0;
+        for (const [price, qty] of agg.bids) {
+          // Bucket [price, price + tick]
+          const pLo = price; const pHi = price + domTickSize;
+          if (!isFinite(pHi) || !isFinite(pLo)) continue;
+          if (domVisibleOnly && !(pLo <= hiPrice && pHi >= loPrice)) continue;
+          const y1 = yOfPrice(pHi); const y2 = yOfPrice(pLo);
+          if (y1==null || y2==null) continue;
+          const top = Math.min(y1, y2), bot = Math.max(y1, y2);
+          const v = Math.min(1, qty / maxQty);
+          const w = Math.max(2, widthPx); // constant width, full overlay
+          const yTop = Math.max(0, top), yBot = Math.min(cssH, bot);
+          if (yBot > yTop) {
+            ctx.fillStyle = barColor('bid', v); ctx.fillRect(xStart, yTop, w, Math.max(1, yBot-yTop-1)); drawn++;
+            if (domDebug && dbgCount < 3) { ctx.fillStyle = '#34d399'; ctx.font='11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif'; ctx.fillText(`${price.toFixed ? price.toFixed(2):price} • ${qty.toFixed ? qty.toFixed(2):qty}`, xStart+4, yTop+12); dbgCount++; }
+          }
+        }
+        if (drawn === 0 && domVisibleOnly) {
+          ctx.fillStyle = 'rgba(239,68,68,0.7)';
+          ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+          ctx.fillText('No DOM levels in view (adjust tick or zoom)', xStart + 6, 16);
+        }
+        // Mid-price guide line (subtle)
+        if (Number.isFinite(domState.mid)) {
+          const y = yOfPrice(domState.mid); if (y!=null && y>=0 && y<=cssH) {
+            ctx.strokeStyle = 'rgba(148,163,184,0.4)'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+            ctx.beginPath(); ctx.moveTo(xStart, y); ctx.lineTo(xStart + widthPx, y); ctx.stroke(); ctx.setLineDash([]);
+          }
+        }
+        ctx.restore();
+      }
+
+  // ===== Drawing overlay =====
+  let nextId = 1;
+  const drawings = []; // stored in data coords (time seconds, price)
+      let activeTool = 'cursor';
+      let drawingStage = 0; // 0 idle, 1 awaiting second point, -1 path drawing
+      let tempPoints = []; // points while drawing (data coords)
+  let strokeColor = '#22c55e';
+  let fillColor = '#22c55e';
+  let opacityVal = 0.2;
+  let strokeWidth = 2;
+  let dashStyle = 'solid';
+  let selectedId = null;
+  let dragState = null; // {mode:'move'|'handle', handleIndex?:number, start:{time,price}}
+
+      function fitDrawCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = drawCanvas.getBoundingClientRect();
+        drawCanvas.width = Math.floor(rect.width * dpr);
+        drawCanvas.height = Math.floor(rect.height * dpr);
+        drawCanvas.style.width = rect.width + 'px';
+        drawCanvas.style.height = rect.height + 'px';
+        return dpr;
+      }
+
+      function priceToY(price) { return candleSeries.priceToCoordinate(price); }
+      function yToPrice(y) { return candleSeries.coordinateToPrice(y); }
+      function timeToX(time) { return chart.timeScale().timeToCoordinate(time); }
+      function xToTime(x) { const t = chart.timeScale().coordinateToTime(x); return typeof t === 'number' ? t : (t?.timestamp ?? null); }
+
+      function renderDrawings() {
+        const dpr = fitDrawCanvas();
+        const ctx = drawCtx; ctx.clearRect(0,0,drawCanvas.width, drawCanvas.height);
+        ctx.save(); ctx.scale(dpr, dpr); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+
+        function applyDash(dash) {
+          if (dash === 'dash') ctx.setLineDash([8, 6]);
+          else if (dash === 'dot') ctx.setLineDash([2, 4]);
+          else ctx.setLineDash([]);
+        }
+
+        function drawLine(p1, p2, color, w, dash='solid') {
+          const x1 = timeToX(p1.time), y1 = priceToY(p1.price);
+          const x2 = timeToX(p2.time), y2 = priceToY(p2.price);
+          if (x1==null||y1==null||x2==null||y2==null) return;
+          applyDash(dash);
+          ctx.strokeStyle = color; ctx.lineWidth = w;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        function drawRay(p1, p2, color, w, dash='solid') {
+          const x1 = timeToX(p1.time), y1 = priceToY(p1.price);
+          const x2 = timeToX(p2.time), y2 = priceToY(p2.price);
+          if (x1==null||y1==null||x2==null||y2==null) return;
+          const dx = x2 - x1, dy = y2 - y1;
+          applyDash(dash);
+          if (Math.abs(dx) < 1e-6) { // vertical ray
+            ctx.strokeStyle = color; ctx.lineWidth = w;
+            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(drawCanvas.clientWidth, y1 + (drawCanvas.clientWidth - x1) * (dy/(dx||1))); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(drawCanvas.clientWidth, y1); ctx.stroke();
+            ctx.setLineDash([]);
+            return;
+          }
+          const tMax = (drawCanvas.clientWidth - x1) / dx;
+          const xEnd = x1 + dx * tMax; const yEnd = y1 + dy * tMax;
+          ctx.strokeStyle = color; ctx.lineWidth = w;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(xEnd, yEnd); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        function drawHLine(price, color, w, dash='solid') {
+          const y = priceToY(price); if (y==null) return;
+          applyDash(dash);
+          ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(drawCanvas.clientWidth, y); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        function drawVLine(time, color, w, dash='solid') {
+          const x = timeToX(time); if (x==null) return;
+          applyDash(dash);
+          ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, drawCanvas.clientHeight); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        function drawRect(p1, p2, color, w, fill, opacity=0.2, dash='solid') {
+          const x1 = timeToX(p1.time), y1 = priceToY(p1.price);
+          const x2 = timeToX(p2.time), y2 = priceToY(p2.price);
+          if (x1==null||y1==null||x2==null||y2==null) return;
+          const x = Math.min(x1,x2), y = Math.min(y1,y2), wpx = Math.abs(x2-x1), hpx = Math.abs(y2-y1);
+          applyDash(dash);
+          ctx.strokeStyle = color; ctx.lineWidth = w; ctx.strokeRect(x, y, wpx, hpx);
+          ctx.setLineDash([]);
+          if (fill) {
+            const rgba = hexToRgba(fill, opacity);
+            ctx.fillStyle = rgba; ctx.fillRect(x, y, wpx, hpx);
+          }
+        }
+        function drawPath(points, color, w, dash='solid') {
+          if (!points || points.length < 2) return;
+          applyDash(dash);
+          ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
+          for (let i=0;i<points.length;i++) {
+            const x = timeToX(points[i].time), y = priceToY(points[i].price);
+            if (x==null||y==null) continue;
+            if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+          }
+          ctx.stroke(); ctx.setLineDash([]);
+        }
+        function drawText(p, text, color) {
+          const x = timeToX(p.time), y = priceToY(p.price); if (x==null||y==null) return;
+          ctx.fillStyle = color; ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+          ctx.fillText(text||'Text', x+4, y-4);
+        }
+        function drawHandle(x,y) { const s=6; ctx.fillStyle = '#f59e0b'; ctx.fillRect(x - s/2, y - s/2, s, s); }
+        function hexToRgba(hex, alpha=1) { const h=hex.replace('#',''); const bigint=parseInt(h.length===3? h.split('').map(c=>c+c).join(''):h,16); const r=(bigint>>16)&255, g=(bigint>>8)&255, b=bigint&255; return `rgba(${r}, ${g}, ${b}, ${alpha})`; }
+
+        // Existing drawings
+        for (const d of drawings) {
+          switch (d.type) {
+            case 'line': drawLine(d.points[0], d.points[1], d.color, d.width, d.dash||'solid'); break;
+            case 'ray': drawRay(d.points[0], d.points[1], d.color, d.width, d.dash||'solid'); break;
+            case 'hline': drawHLine(d.price, d.color, d.width, d.dash||'solid'); break;
+            case 'vline': drawVLine(d.time, d.color, d.width, d.dash||'solid'); break;
+            case 'rect': drawRect(d.points[0], d.points[1], d.color, d.width, d.fillColor||fillColor, d.opacity??opacityVal, d.dash||'solid'); break;
+            case 'path': drawPath(d.points, d.color, d.width, d.dash||'solid'); break;
+            case 'text': drawText(d.point, d.text, d.color); break;
+          }
+          if (d.id === selectedId) {
+            // selection handles
+            if (d.type==='line' || d.type==='ray') {
+              const a=d.points[0], b=d.points[1]; const ax=timeToX(a.time), ay=priceToY(a.price), bx=timeToX(b.time), by=priceToY(b.price);
+              if (ax!=null&&ay!=null) drawHandle(ax,ay); if (bx!=null&&by!=null) drawHandle(bx,by);
+            } else if (d.type==='rect') {
+              const a=d.points[0], b=d.points[1]; const x1=timeToX(a.time), y1=priceToY(a.price), x2=timeToX(b.time), y2=priceToY(b.price);
+              if (x1!=null&&y1!=null&&x2!=null&&y2!=null) { const xs=[Math.min(x1,x2), Math.max(x1,x2)], ys=[Math.min(y1,y2), Math.max(y1,y2)]; drawHandle(xs[0],ys[0]); drawHandle(xs[1],ys[0]); drawHandle(xs[0],ys[1]); drawHandle(xs[1],ys[1]); }
+            } else if (d.type==='hline') { const y=priceToY(d.price); if (y!=null) drawHandle(20,y); }
+            else if (d.type==='vline') { const x=timeToX(d.time); if (x!=null) drawHandle(x,20); }
+            else if (d.type==='text') { const p=d.point; const x=timeToX(p.time), y=priceToY(p.price); if (x!=null&&y!=null) drawHandle(x,y); }
+            else if (d.type==='path') { const p=d.points[0]; const x=timeToX(p.time), y=priceToY(p.price); if (x!=null&&y!=null) drawHandle(x,y); }
+          }
+        }
+
+        // Preview while drawing
+        if (drawingStage === 1 && tempPoints.length) {
+          const preview = { color: '#60a5fa', width: 1.5 };
+          switch (activeTool) {
+            case 'line': {
+              const last = tempPoints[tempPoints.length-1];
+              const mouse = last.__cursor;
+              if (mouse) { drawLine(last, mouse, preview.color, preview.width, dashStyle); }
+              break;
+            }
+            case 'ray': {
+              const last = tempPoints[tempPoints.length-1];
+              const mouse = last.__cursor;
+              if (mouse) drawRay(last, mouse, preview.color, preview.width, dashStyle);
+              break;
+            }
+            case 'rect': {
+              const a = tempPoints[0]; const mouse = tempPoints[0].__cursor;
+              if (a && mouse) drawRect(a, mouse, preview.color, preview.width, fillColor, opacityVal, dashStyle);
+              break;
+            }
+          }
+        }
+
+        ctx.restore();
+      }
+
+      function setTool(name) {
+        activeTool = name;
+        drawingStage = 0; tempPoints = [];
+        drawCanvas.style.pointerEvents = (name==='cursor' || name==='clear') ? 'none' : 'auto';
+        document.querySelectorAll('.tv-btn').forEach(b => b.classList.toggle('active', b.dataset.tool===name));
+      }
+
+      // Toolbar handlers
+      document.getElementById('toolbar').addEventListener('click', (e) => {
+        const btn = e.target.closest('.tv-btn'); if (!btn) return;
+        const tool = btn.dataset.tool;
+        if (tool === 'clear') { drawings.splice(0, drawings.length); renderDrawings(); return; }
+        setTool(tool);
+      });
+
+      // Mouse handling on drawing canvas
+      function getMouseDataCoords(ev) {
+        const rect = drawCanvas.getBoundingClientRect();
+        const x = ev.clientX - rect.left; const y = ev.clientY - rect.top;
+        const time = xToTime(x); const price = yToPrice(y);
+        if (time==null || price==null) return null;
+        return { time: Math.floor(time), price: price };
+      }
+
+      function createDrawing(obj) { obj.id = nextId++; return obj; }
+      function setSelected(id) { selectedId = id; renderDrawings(); syncStylePanelToSelection(); }
+      function hitTest(ev) {
+        const rect = drawCanvas.getBoundingClientRect(); const x = ev.clientX - rect.left; const y = ev.clientY - rect.top; const hitTol = 6;
+        function distToSeg(px,py, x1,y1, x2,y2){ const A=px-x1,B=py-y1,C=x2-x1,D=y2-y1; const dot=A*C+B*D; const len=C*C+D*D; let t=len?dot/len:-1; t=Math.max(0,Math.min(1,t)); const qx=x1+t*C,qy=y1+t*D; const dx=px-qx,dy=py-qy; return Math.sqrt(dx*dx+dy*dy); }
+        function nearCorner(px,py,xs,ys,tol){ const corners=[[xs[0],ys[0]],[xs[1],ys[0]],[xs[0],ys[1]],[xs[1],ys[1]]]; for (let i=0;i<corners.length;i++){ const [cx,cy]=corners[i]; if (Math.abs(px-cx)<=tol && Math.abs(py-cy)<=tol) return i; } return null; }
+        function handleNearLine(px,py,x1,y1,x2,y2){ const htol=7; if (Math.hypot(px-x1,py-y1)<=htol) return 0; if (Math.hypot(px-x2,py-y2)<=htol) return 1; return null; }
+        for (let i=drawings.length-1;i>=0;i--){ const d=drawings[i];
+          if (d.type==='line' || d.type==='ray'){ const a=d.points[0], b=d.points[1]; const x1=timeToX(a.time), y1=priceToY(a.price), x2=timeToX(b.time), y2=priceToY(b.price); if ([x1,y1,x2,y2].some(v=>v==null)) continue; const dist=distToSeg(x,y,x1,y1,x2,y2); if (dist<=hitTol) return {id:d.id, kind:d.type, handle:handleNearLine(x,y,x1,y1,x2,y2)}; }
+          else if (d.type==='rect'){ const a=d.points[0], b=d.points[1]; const x1=timeToX(a.time), y1=priceToY(a.price), x2=timeToX(b.time), y2=priceToY(b.price); if ([x1,y1,x2,y2].some(v=>v==null)) continue; const xs=[Math.min(x1,x2),Math.max(x1,x2)], ys=[Math.min(y1,y2),Math.max(y1,y2)]; const inside=x>=xs[0]&&x<=xs[1]&&y>=ys[0]&&y<=ys[1]; const corner=nearCorner(x,y,xs,ys,hitTol); if (corner!=null||inside) return {id:d.id, kind:'rect', handle:corner}; }
+          else if (d.type==='hline'){ const yy=priceToY(d.price); if (yy!=null && Math.abs(y-yy)<=hitTol) return {id:d.id, kind:'hline'}; }
+          else if (d.type==='vline'){ const xx=timeToX(d.time); if (xx!=null && Math.abs(x-xx)<=hitTol) return {id:d.id, kind:'vline'}; }
+          else if (d.type==='text'){ const px=timeToX(d.point.time), py=priceToY(d.point.price); if (px!=null&&py!=null && Math.hypot(x-px,y-py)<=hitTol+4) return {id:d.id, kind:'text'}; }
+          else if (d.type==='path'){ const pts=d.points.map(p=>[timeToX(p.time), priceToY(p.price)]); for (let j=1;j<pts.length;j++){ const [x1,y1]=pts[j-1], [x2,y2]=pts[j]; if ([x1,y1,x2,y2].some(v=>v==null)) continue; if (distToSeg(x,y,x1,y1,x2,y2)<=hitTol) return {id:d.id, kind:'path'}; } }
+        }
+        return null;
+      }
+      drawCanvas.addEventListener('mousedown', (ev) => {
+        const p = getMouseDataCoords(ev); if (!p) return;
+        if (activeTool==='cursor') {
+          const hit = hitTest(ev);
+          if (hit) {
+            setSelected(hit.id);
+            const d = drawings.find(dd=>dd.id===hit.id);
+            dragState = { mode: (hit.handle!=null? 'handle':'move'), handleIndex: hit.handle ?? null, start: p, original: JSON.parse(JSON.stringify(d)) };
+          } else { setSelected(null); }
+          return;
+        }
+        if (activeTool==='hline') { drawings.push(createDrawing({ type:'hline', price:p.price, color:strokeColor, width:strokeWidth, dash:dashStyle })); renderDrawings(); return; }
+        if (activeTool==='vline') { drawings.push(createDrawing({ type:'vline', time:p.time, color:strokeColor, width:strokeWidth, dash:dashStyle })); renderDrawings(); return; }
+        if (activeTool==='text') { const text = prompt('Text label:', 'Note'); drawings.push(createDrawing({ type:'text', point:p, text:text||'Text', color:'#eab308' })); renderDrawings(); return; }
+        if (activeTool==='path') { drawingStage = -1; tempPoints = [p]; return; }
+        if (drawingStage===0) { drawingStage=1; tempPoints=[p]; tempPoints[0].__cursor=p; renderDrawings(); }
+        else if (drawingStage===1) {
+          const a = tempPoints[0]; const b = p;
+          if (activeTool==='line') drawings.push(createDrawing({ type:'line', points:[a,b], color:strokeColor, width:strokeWidth, dash:dashStyle }));
+          if (activeTool==='ray') drawings.push(createDrawing({ type:'ray', points:[a,b], color:strokeColor, width:strokeWidth, dash:dashStyle }));
+          if (activeTool==='rect') drawings.push(createDrawing({ type:'rect', points:[a,b], color:strokeColor, width:strokeWidth, fillColor:fillColor, opacity:opacityVal, dash:dashStyle }));
+          drawingStage=0; tempPoints=[]; renderDrawings();
+        }
+      });
+
+      drawCanvas.addEventListener('mousemove', (ev) => {
+        const p = getMouseDataCoords(ev); if (!p) return;
+        if (activeTool==='cursor') {
+          if (dragState && selectedId!=null) {
+            const d = drawings.find(dd=>dd.id===selectedId); if (!d) return;
+            if (dragState.mode==='move') {
+              const dt = p.time - dragState.start.time; const dp = p.price - dragState.start.price;
+              if (d.type==='line' || d.type==='ray') { d.points = dragState.original.points.map(pt=>({ time: pt.time+dt, price: pt.price+dp })); }
+              else if (d.type==='rect') { d.points = dragState.original.points.map(pt=>({ time: pt.time+dt, price: pt.price+dp })); }
+              else if (d.type==='hline') { d.price = dragState.original.price + dp; }
+              else if (d.type==='vline') { d.time = dragState.original.time + dt; }
+              else if (d.type==='text') { d.point = { time: dragState.original.point.time+dt, price: dragState.original.point.price+dp }; }
+              else if (d.type==='path') { d.points = dragState.original.points.map(pt=>({ time: pt.time+dt, price: pt.price+dp })); }
+            } else if (dragState.mode==='handle') {
+              const idx = dragState.handleIndex ?? 0;
+              if (d.type==='line' || d.type==='ray') { d.points[idx] = p; }
+              else if (d.type==='rect') {
+                const a = { ...dragState.original.points[0] }, b = { ...dragState.original.points[1] };
+                if (idx===0) { d.points = [p, { time: b.time, price: b.price }]; }
+                if (idx===1) { d.points = [{ time: a.time, price: p.price }, { time: p.time, price: b.price }]; }
+                if (idx===2) { d.points = [{ time: p.time, price: a.price }, { time: b.time, price: p.price }]; }
+                if (idx===3) { d.points = [ { time: a.time, price: a.price }, p ]; }
+              }
+            }
+            renderDrawings();
+          }
+          return;
+        }
+        if (drawingStage===1 && tempPoints.length) { tempPoints[0].__cursor = p; renderDrawings(); }
+        if (drawingStage===-1 && activeTool==='path') { tempPoints.push(p); renderDrawings(); }
+      });
+      drawCanvas.addEventListener('mouseup', (ev) => {
+        if (dragState) { dragState = null; return; }
+        if (activeTool==='path' && drawingStage===-1) { drawings.push(createDrawing({ type:'path', points:[...tempPoints], color:strokeColor, width:strokeWidth, dash:dashStyle })); drawingStage=0; tempPoints=[]; renderDrawings(); }
+      });
+      window.addEventListener('keydown', (ev) => {
+        if ((ev.key==='Delete' || ev.key==='Backspace') && selectedId!=null) {
+          const idx = drawings.findIndex(d=>d.id===selectedId); if (idx>=0) { drawings.splice(idx,1); selectedId=null; renderDrawings(); }
+        }
+      });
+
+      // Style panel logic
+      function syncStylePanelToSelection() {
+        const sel = drawings.find(d=>d.id===selectedId);
+        if (sel) {
+          strokeColorInp.value = sel.color || strokeColor;
+          widthInp.value = String(sel.width || strokeWidth);
+          dashInp.value = sel.dash || dashStyle;
+          if (sel.type==='rect') { fillColorInp.value = sel.fillColor || fillColor; opacityInp.value = sel.opacity ?? opacityVal; }
+        } else {
+          strokeColorInp.value = strokeColor; widthInp.value = String(strokeWidth); dashInp.value = dashStyle; fillColorInp.value = fillColor; opacityInp.value = opacityVal;
+        }
+      }
+      function applyStyleChanges() {
+        const sel = drawings.find(d=>d.id===selectedId);
+        if (sel) {
+          sel.color = strokeColorInp.value; sel.width = parseInt(widthInp.value,10); sel.dash = dashInp.value;
+          if (sel.type==='rect') { sel.fillColor = fillColorInp.value; sel.opacity = parseFloat(opacityInp.value); }
+          renderDrawings();
+        } else {
+          strokeColor = strokeColorInp.value; strokeWidth = parseInt(widthInp.value,10); dashStyle = dashInp.value; fillColor = fillColorInp.value; opacityVal = parseFloat(opacityInp.value);
+        }
+      }
+      styleBtn.addEventListener('click', () => { stylePanel.style.display = stylePanel.style.display==='block' ? 'none' : 'block'; syncStylePanelToSelection(); });
+      ;[strokeColorInp, fillColorInp, opacityInp, widthInp, dashInp].forEach(inp => inp.addEventListener('input', applyStyleChanges));
+
+      // Chart setup + theme
+      const chartEl = $('#chart');
+      const rootEl = document.documentElement;
+      function currentTheme(){ return rootEl.getAttribute('data-theme')||'dark'; }
+      function themeColors(theme){ if(theme==='light') return { bg:'#ffffff', text:'#111827', grid:'#e5e7eb', wick:'#6b7280' }; return { bg:'#0e1116', text:'#94a3b8', grid:'#111827', wick:'#64748b' }; }
+      rootEl.setAttribute('data-theme','dark');
+      let theme = currentTheme();
+      let themeCfg = themeColors(theme);
+      const chart = LightweightCharts.createChart(chartEl, {
+        layout: { background: { type: 'Solid', color: themeCfg.bg }, textColor: themeCfg.text },
+        grid: { vertLines: { color: themeCfg.grid }, horzLines: { color: themeCfg.grid } },
+        rightPriceScale: { borderVisible: false },
+        timeScale: {
+          borderVisible: false,
+          rightOffset: 10,
+          barSpacing: 8,
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        localization: { locale: navigator.language || 'en-US' },
+      });
+      let candleSeries = null; // active main price series (candle, bar, or line)
+      // Style selector and series management
+      let chartStyle = (localStorage.getItem('chartStyle') || 'candles');
+      const styleSel = document.getElementById('styleSel');
+      if (styleSel) styleSel.value = chartStyle;
+
+      function applyFullData(bars){
+        if (!candleSeries || !Array.isArray(bars)) return;
+        if (chartStyle === 'line') {
+          const line = bars.map(b => ({ time: b.time, value: b.close }));
+          candleSeries.setData(line);
+        } else {
+          candleSeries.setData(bars);
+        }
+      }
+
+      function updateSeriesWithBar(bar){
+        if (!candleSeries || !bar) return;
+        if (chartStyle === 'line') {
+          candleSeries.update({ time: bar.time, value: bar.close });
+        } else {
+          candleSeries.update(bar);
+        }
+      }
+
+      function rebuildSeries(style){
+        if (candleSeries) { try { chart.removeSeries(candleSeries); } catch(e){} candleSeries = null; }
+        if (style === 'bars') {
+          candleSeries = chart.addBarSeries({ upColor:'#16a34a', downColor:'#ef4444', thinBars:false });
+        } else if (style === 'line') {
+          const color = currentTheme()==='dark' ? '#60a5fa' : '#2563eb';
+          candleSeries = chart.addLineSeries({ color, lineWidth:2 });
+        } else { // candles or hollow
+          candleSeries = chart.addCandlestickSeries({
+            upColor:'#16a34a', downColor:'#ef4444', borderDownColor:'#ef4444', borderUpColor:'#16a34a', wickDownColor: themeCfg.wick, wickUpColor: themeCfg.wick
+          });
+          if (style === 'hollow') {
+            candleSeries.applyOptions({
+              upColor:'rgba(0,0,0,0)', downColor:'rgba(0,0,0,0)', borderUpColor:'#16a34a', borderDownColor:'#ef4444', borderVisible:true,
+              wickDownColor: themeCfg.wick, wickUpColor: themeCfg.wick
+            });
+          }
+        }
+        // Watch price scale width for overlays
+        if (candleSeries && candleSeries.priceScale && typeof candleSeries.priceScale === 'function') {
+          const ps = candleSeries.priceScale();
+          if (ps && typeof ps.subscribeSizeChanged === 'function') { ps.subscribeSizeChanged(() => { renderDrawings(); renderDOM(); }); }
+        }
+        applyFullData(currentBars || []);
+        renderDrawings(); renderDOM();
+      }
+
+      // Build initial series and subscribe time-scale changes
+      rebuildSeries(chartStyle);
+          // Helper: compute DOM overlay width in px and pin last bar to its left edge
+          function computeDomOverlayWidthPx() {
+            try {
+              const dpr = window.devicePixelRatio || 1;
+              const rect = chartEl.getBoundingClientRect();
+              const cssW = rect.width;
+              let priceScaleWidth = 0;
+              if (candleSeries && typeof candleSeries.priceScale === 'function') {
+                const ps = candleSeries.priceScale();
+                if (ps && typeof ps.width === 'function') priceScaleWidth = ps.width() || 0;
+              }
+              const chartAreaW = Math.max(0, cssW - priceScaleWidth);
+              const overlayPct = 0.10; // must match renderDOM
+              const widthPx = Math.floor(chartAreaW * overlayPct);
+              return { widthPx, priceScaleWidth, chartAreaW };
+            } catch { return { widthPx: 0, priceScaleWidth: 0, chartAreaW: 0 }; }
+          }
+
+          function pinLastBarToDomEdge() {
+            if (!currentBars || !currentBars.length) return;
+            const last = currentBars[currentBars.length-1];
+            if (!last) return;
+            const ts = chart.timeScale();
+            const { widthPx } = computeDomOverlayWidthPx();
+            // Estimate px-per-bar using last two bars when possible
+            let pxPerBar = 8;
+            try {
+              const xLast = ts.timeToCoordinate(last.time);
+              const prev = currentBars[currentBars.length-2];
+              const xPrev = prev ? ts.timeToCoordinate(prev.time) : null;
+              if (xLast != null && xPrev != null) pxPerBar = Math.max(1, Math.abs(xLast - xPrev));
+            } catch {}
+            const margin = 4; // small breathing space
+            const desiredGapPx = Math.max(0, widthPx + margin);
+            const rightOffset = desiredGapPx / Math.max(1, pxPerBar);
+            try { ts.setRightOffset(rightOffset); } catch {}
+          }
+
+          chart.timeScale().subscribeVisibleTimeRangeChange(() => { renderDrawings(); renderDOM(); pinLastBarToDomEdge(); });
+          chart.timeScale().subscribeVisibleLogicalRangeChange(() => { renderDrawings(); renderDOM(); pinLastBarToDomEdge(); });
+
+      function setLegendText(bar) {
+        if (!bar) return;
+        const t = new Date(bar.time*1000).toLocaleString();
+        legend.textContent = `${t}  O:${bar.open.toFixed(2)} H:${bar.high.toFixed(2)} L:${bar.low.toFixed(2)} C:${bar.close.toFixed(2)}`;
+      }
+
+      // Keep toolbar below info panel
+      function layoutOverlays() {
+        if (!toolbarEl) return;
+        const top = ((chartInfo?.offsetTop) || 8) + ((chartInfo?.offsetHeight) || 0) + 8; // 8px gap below
+        toolbarEl.style.top = `${top}px`;
+      }
+
+      chart.subscribeCrosshairMove(param => {
+        if (param && param.time != null) {
+          const p = param.seriesData.get(candleSeries);
+          if (p) {
+            // Merge with stored volume if missing
+            const full = (p && barsByTime.get(p.time)) || p;
+            setLegendText(full);
+            updateOHLCVDisplay(full);
+          }
+        }
+      });
+  function applyTheme(next){
+    rootEl.setAttribute('data-theme', next); theme = next; themeCfg = themeColors(next);
+    chart.applyOptions({ layout:{ background:{ type:'Solid', color: themeCfg.bg }, textColor: themeCfg.text }, grid:{ vertLines:{ color: themeCfg.grid }, horzLines:{ color: themeCfg.grid } } });
+    if (candleSeries) {
+      if (chartStyle === 'line') {
+        candleSeries.applyOptions({ color: next==='dark' ? '#60a5fa' : '#2563eb' });
+      } else if (chartStyle === 'bars') {
+        candleSeries.applyOptions({ upColor:'#16a34a', downColor:'#ef4444' });
+      } else if (chartStyle === 'hollow') {
+        candleSeries.applyOptions({
+          upColor:'rgba(0,0,0,0)', downColor:'rgba(0,0,0,0)', borderUpColor:'#16a34a', borderDownColor:'#ef4444', borderVisible:true,
+          wickDownColor: themeCfg.wick, wickUpColor: themeCfg.wick
+        });
+      } else {
+        candleSeries.applyOptions({ wickDownColor: themeCfg.wick, wickUpColor: themeCfg.wick, upColor:'#16a34a', downColor:'#ef4444', borderUpColor:'#16a34a', borderDownColor:'#ef4444' });
+      }
+    }
+    renderDrawings(); renderDOM();
+  }
+      themeToggle.addEventListener('click', () => { const next = currentTheme()==='dark' ? 'light' : 'dark'; themeToggle.textContent = next==='dark' ? 'Dark' : 'Light'; applyTheme(next); });
+
+      // Load initial bars via REST then connect WS for updates
+      let barsSocket = null;
+      async function loadBars(tf) {
+        if (candleSeries && candleSeries.setData) candleSeries.setData([]);
+        try {
+          const res = await fetch(`/api/bars?tf=${encodeURIComponent(tf)}&limit=500`);
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            applyFullData(data);
+            currentBars = data;
+            barsByTime.clear();
+            for (const b of data) { if (b && typeof b.time==='number') barsByTime.set(b.time, b); }
+            setLegendText(data[data.length-1]);
+            chart.timeScale().fitContent();
+            updateOHLCVDisplay(data[data.length-1]);
+          }
+        } catch (e) {
+          console.error('bars fetch error', e);
+        }
+
+        // Close old socket if any
+        if (barsSocket) try { barsSocket.close(); } catch {}
+        barsSocket = new WebSocket(`ws://${location.host}/ws/bars?tf=${encodeURIComponent(tf)}&poll_ms=1000`);
+        // Debounced FP tail refresh to keep running bar footprint live
+        let fpTailTimer = null;
+        async function refreshFootprintTailDebounced() {
+          if (fpTailTimer) clearTimeout(fpTailTimer);
+          fpTailTimer = setTimeout(async () => {
+            try {
+              const tfNow = tfSel.value; const tick = TICK_BY_TF[tfNow] || 0.1;
+              const res = await fetch(`/api/footprint?tf=${encodeURIComponent(tfNow)}&limit=40&tick=${tick}`);
+              const arr = await res.json();
+              if (Array.isArray(arr)) {
+                for (const col of arr) {
+                  if (!col || typeof col.t !== 'number') continue;
+                  fpByTime.set(col.t, { p0: col.p0, tick: col.tick, rows: col.rows || [] });
+                }
+                renderFootprint();
+              }
+            } catch {}
+          }, 450);
+        }
+
+        barsSocket.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'snapshot') {
+              if (Array.isArray(msg.series)) { applyFullData(msg.series); currentBars = msg.series; barsByTime.clear(); for (const b of msg.series) { if (b && typeof b.time==='number') barsByTime.set(b.time, b); } fpCache.clear(); updateOHLCVDisplay(msg.series[msg.series.length-1]); }
+            } else if (msg.type === 'update' && msg.bar) {
+              updateSeriesWithBar(msg.bar);
+              // update currentBars (append or replace last)
+              if (currentBars.length && currentBars[currentBars.length-1].time === msg.bar.time) {
+                currentBars[currentBars.length-1] = msg.bar;
+              } else {
+                currentBars.push(msg.bar);
+              }
+              if (msg.bar && typeof msg.bar.time==='number') barsByTime.set(msg.bar.time, msg.bar);
+              setLegendText(msg.bar);
+              updateOHLCVDisplay(msg.bar);
+              // Keep the latest bar docked next to the DOM overlay and refresh FP tail
+              pinLastBarToDomEdge();
+              refreshFootprintTailDebounced();
+            }
+          } catch (e) {}
+        };
+      }
+
+  tfSel.addEventListener('change', () => { loadBars(tfSel.value); loadFootprint(tfSel.value); });
+      $('#resetView').addEventListener('click', () => chart.timeScale().fitContent());
+      // Style selector listener
+      if (styleSel) {
+        styleSel.addEventListener('change', () => {
+          chartStyle = styleSel.value;
+          try { localStorage.setItem('chartStyle', chartStyle); } catch(e){}
+          rebuildSeries(chartStyle);
+        });
+      }
+  themeToggle.textContent = 'Light';
+
+      // Connect DOM WS and render overlay
+      let domSocket = null;
+      let lastDomAt = 0;
+      function connectDOM() {
+        if (domSocket) try { domSocket.close(); } catch {}
+        domSocket = new WebSocket(`ws://${location.host}/ws/dom`);
+        const statusEl = document.getElementById('domStatus');
+        if (statusEl) statusEl.textContent = 'DOM: connecting…';
+        domSocket.onopen = () => { if (statusEl) statusEl.textContent = 'DOM: connected'; };
+        domSocket.onclose = () => { if (statusEl) statusEl.textContent = 'DOM: disconnected'; };
+        domSocket.onerror = () => { if (statusEl) statusEl.textContent = 'DOM: error'; };
+        domSocket.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'dom') {
+              domState = { mid: msg.mid, bids: msg.bids, asks: msg.asks };
+              lastDomAt = Date.now();
+              if (statusEl) statusEl.textContent = `DOM: ${msg.bids?.length||0} bids / ${msg.asks?.length||0} asks`;
+              updateBBOAndSpread();
+            }
+          } catch {}
+        };
+      }
+
+      // Animation loop for overlay drawing (decoupled from WS ticks)
+        function loop() { requestAnimationFrame(loop); renderDOM(); renderFootprint(); }
+      loop();
+
+    // Initial load
+  loadBars(tfSel.value);
+  loadFootprint(tfSel.value);
+      connectDOM();
+  // DOM controls
+  const domToggle = document.getElementById('domToggle');
+      const domTickSel = document.getElementById('domTick');
+      const domVisibleOnlyChk = document.getElementById('domVisibleOnly');
+      const fpToggle = document.getElementById('fpToggle');
+      // Restore persisted
+      try {
+        const savedDomEnabled = localStorage.getItem('domEnabled');
+        const savedTick = localStorage.getItem('domTickSize');
+        const savedVisOnly = localStorage.getItem('domVisibleOnly');
+        const savedFp = localStorage.getItem('fpEnabled');
+        if (savedDomEnabled != null) domEnabled = savedDomEnabled === 'true';
+        if (savedTick != null) domTickSize = parseFloat(savedTick);
+        if (savedVisOnly != null) domVisibleOnly = savedVisOnly === 'true';
+        if (savedFp != null) fpEnabled = savedFp === 'true';
+      } catch {}
+      domToggle.textContent = domEnabled ? 'On' : 'Off';
+      domTickSel.value = (domTickSize || 0.10).toFixed(2);
+      domVisibleOnlyChk.checked = !!domVisibleOnly;
+      function applyFpEnabled(){
+        if (fpToggle) fpToggle.textContent = fpEnabled ? 'On' : 'Off';
+        if (fpCanvas) fpCanvas.style.display = fpEnabled ? 'block' : 'none';
+        try { localStorage.setItem('fpEnabled', String(fpEnabled)); } catch {}
+        if (fpEnabled) renderFootprint(); else { if (fpCtx) fpCtx.clearRect(0,0,fpCanvas.width, fpCanvas.height); }
+      }
+      fpCanvas.style.display = fpEnabled ? 'block' : 'none';
+      fpToggle.textContent = fpEnabled ? 'On' : 'Off';
+      domToggle.addEventListener('click', () => { domEnabled = !domEnabled; domToggle.textContent = domEnabled ? 'On' : 'Off'; try { localStorage.setItem('domEnabled', String(domEnabled)); } catch {}; renderDOM(); });
+      domTickSel.addEventListener('change', () => { domTickSize = parseFloat(domTickSel.value); try { localStorage.setItem('domTickSize', String(domTickSize)); } catch {}; renderDOM(); });
+      domVisibleOnlyChk.addEventListener('change', () => { domVisibleOnly = domVisibleOnlyChk.checked; try { localStorage.setItem('domVisibleOnly', String(domVisibleOnly)); } catch {}; renderDOM(); });
+      fpToggle.addEventListener('click', () => { fpEnabled = !fpEnabled; applyFpEnabled(); });
+
+      // ===== Footprint data (REST) =====
+      async function loadFootprint(tf) {
+        try {
+          const tick = TICK_BY_TF[tf] || 0.1;
+          const res = await fetch(`/api/footprint?tf=${encodeURIComponent(tf)}&limit=500&tick=${tick}`);
+          const arr = await res.json();
+          if (!Array.isArray(arr)) return;
+          fpByTime.clear();
+          let minT = Infinity, maxT = -Infinity, count = 0;
+          for (const col of arr) {
+            if (!col || typeof col.t !== 'number') continue;
+            fpByTime.set(col.t, { p0: col.p0, tick: col.tick, rows: col.rows || [], imb: col.imb || [] });
+            minT = Math.min(minT, col.t); maxT = Math.max(maxT, col.t); count++;
+          }
+          try { console.log(`[FP] loaded ${count} cols for ${tf}; time range ${minT}..${maxT}`); } catch {}
+          renderFootprint();
+        } catch (e) { console.warn('footprint fetch error', e); }
+      }
+
+      // ===== Footprint rendering =====
+      function fitFpCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = fpCanvas.getBoundingClientRect();
+        fpCanvas.width = Math.floor(rect.width * dpr);
+        fpCanvas.height = Math.floor(rect.height * dpr);
+        fpCanvas.style.width = rect.width + 'px';
+        fpCanvas.style.height = rect.height + 'px';
+        return dpr;
+      }
+      const TF_SECONDS = { '1m':60, '3m':180, '5m':300, '15m':900, '30m':1800, '1h':3600, '4h':14400 };
+      function getFootprintForBar(bar, tf) {
+        const sec = TF_SECONDS[tf] || 60;
+        const bucketTime = Math.floor(bar.time / sec) * sec;
+        let col = fpByTime.get(bucketTime) || fpByTime.get(bar.time);
+        if (!col) {
+          // try nearest within 60s if exact not found
+          let best = null, bestDt = 1e12;
+          const tol = Math.max(60, TF_SECONDS[tf] || 60);
+          for (const [t, c] of fpByTime) {
+            const dt = Math.abs(t - bar.time);
+            if (dt < bestDt && dt <= tol) { bestDt = dt; best = c; }
+          }
+          if (best) col = best;
+        }
+  if (col && Array.isArray(col.rows)) return col;
+  // fallback: build an empty column aligned with bar range, so later updates slot in
+  const tick = TICK_BY_TF[tf] || 0.1;
+  const lo = Math.min(bar.low, bar.high);
+  const p0 = Math.floor(lo / tick) * tick;
+  return { p0, tick, rows: [] };
+      }
+      function renderFootprint() {
+        if (!fpEnabled) { fpCtx && fpCtx.clearRect(0,0,fpCanvas.width, fpCanvas.height); return; }
+        const dpr = fitFpCanvas();
+        const ctx = fpCtx; if (!ctx) return; ctx.clearRect(0,0,fpCanvas.width, fpCanvas.height);
+        const cssW = fpCanvas.width / dpr; const cssH = fpCanvas.height / dpr;
+  ctx.save(); ctx.scale(dpr, dpr);
+        // Theme-aware text color for labels
+        const isDark = (document.documentElement.getAttribute('data-theme') || 'dark') === 'dark';
+        const textColor = isDark ? '#e5e7eb' : '#0f172a';
+  // Helper to snap coordinates to device pixel for crisper rendering
+  const snap = (v) => Math.round(v);
+        function fmtQty(q) {
+          if (!Number.isFinite(q)) return '';
+          const a = Math.abs(q);
+          if (a >= 1000) return q.toFixed(0);
+          if (a >= 100) return q.toFixed(1);
+          if (a >= 10) return q.toFixed(2);
+          if (a >= 1) return q.toFixed(2);
+          return q.toFixed(3);
+        }
+        // Visible time range
+        const ts = chart.timeScale();
+        const vr = ts.getVisibleLogicalRange();
+        if (!vr || !currentBars || !currentBars.length) { ctx.restore(); return; }
+        const firstIdx = Math.max(0, Math.floor(vr.from ?? 0) - 2);
+        const lastIdx = Math.min(currentBars.length - 1, Math.ceil(vr.to ?? currentBars.length - 1) + 2);
+  const tf = tfSel.value;
+        // Determine visible price window
+        const loPrice = candleSeries.coordinateToPrice(cssH) ?? -Infinity;
+        const hiPrice = candleSeries.coordinateToPrice(0) ?? Infinity;
+        // Column width estimation
+        function barX(time) { return chart.timeScale().timeToCoordinate(time); }
+        function priceY(p) { return candleSeries.priceToCoordinate(p); }
+        let drawnCells = 0;
+        for (let i = firstIdx; i <= lastIdx; i++) {
+          const bar = currentBars[i]; if (!bar) continue;
+          const x = barX(bar.time); if (x == null) continue;
+          const prev = currentBars[i-1];
+          const next = currentBars[i+1];
+          const xPrev = prev ? barX(prev.time) : null;
+          const xNext = next ? barX(next.time) : null;
+          let dx = 8;
+          if (xPrev != null && xNext != null) dx = (Math.abs(xNext - x) + Math.abs(x - xPrev)) / 2;
+          else if (xNext != null) dx = Math.abs(xNext - x);
+          else if (xPrev != null) dx = Math.abs(x - xPrev);
+          const colW = Math.max(4, Math.min(48, dx * 0.9));
+          const left = x - colW/2, midX = x, right = x + colW/2;
+          const column = getFootprintForBar(bar, tf);
+          if (!column || !column.rows || !column.rows.length) continue;
+          const ctick = column.tick || (TICK_BY_TF[tf] || 0.1);
+          // Build fast lookup maps for imbalance per row index (0=sell,1=buy)
+          if (!column._imbMapL || !column._imbMapR) {
+            const mL = new Map(); const mR = new Map();
+            const arr = Array.isArray(column.imb) ? column.imb : [];
+            for (const e of arr) {
+              if (!Array.isArray(e) || e.length < 4) continue;
+              const ri = e[0]|0; const side = e[1]|0; const kind = e[2]|0; const strength = e[3]|0;
+              if (side === 0) { mL.set(ri, { kind, strength }); } else { mR.set(ri, { kind, strength }); }
+            }
+            column._imbMapL = mL; column._imbMapR = mR;
+          }
+          // Normalize intensity per visible rows
+          let maxV = 1;
+          for (const [ri, b, a] of column.rows) {
+            const pTop = column.p0 + (ri+1)*ctick, pBot = column.p0 + ri*ctick;
+            if (pBot > hiPrice || pTop < loPrice) continue; // outside
+            maxV = Math.max(maxV, a, b);
+          }
+          // Find POC (max total volume) among visible rows
+          let pocIdx = -1, pocVol = -1;
+          for (const [ri, b, a] of column.rows) {
+            const pTop = column.p0 + (ri+1)*ctick, pBot = column.p0 + ri*ctick;
+            if (pBot > hiPrice || pTop < loPrice) continue;
+            const tv = (a || 0) + (b || 0);
+            if (tv > pocVol) { pocVol = tv; pocIdx = ri; }
+          }
+          // Draw rows (text only)
+          for (const [ri, b, a] of column.rows) {
+            const pTop = column.p0 + (ri+1)*ctick, pBot = column.p0 + ri*ctick;
+            if (pBot > hiPrice || pTop < loPrice) continue;
+            const yTop = priceY(pTop), yBot = priceY(pBot);
+            if (yTop==null||yBot==null) continue; const top = Math.min(yTop,yBot), bot = Math.max(yTop,yBot);
+            const h = Math.max(1, bot - top - 1);
+            const aNorm = Math.min(1, a / maxV), bNorm = Math.min(1, b / maxV);
+            // Draw numeric labels only (dynamic font scales with both zoom directions)
+            if (h >= 6 && colW >= 6) {
+              const cy = snap(top + h/2);
+              const fsW = colW * 0.75; // horizontal zoom contribution
+              const fsH = h * 0.80;    // vertical zoom contribution
+              const fs = Math.max(8, Math.min(28, Math.floor(Math.min(fsW, fsH))));
+              const pad = Math.max(2, Math.floor(colW * 0.08));
+              ctx.textBaseline = 'middle';
+              const isPoc = (ri === pocIdx);
+              // Imbalance color tables (theme-safe, solid colors)
+              const Y = {1:'#fde047', 2:'#f59e0b', 3:'#d97706'}; // yellow shades normal/strong/heavy
+              const O = {1:'#fb923c', 2:'#f97316', 3:'#ea580c'}; // orange shades normal/strong/heavy
+              // Resolve left/right imbalance, if any
+              const imbL = column._imbMapL?.get(ri) || null; // affects SELL text
+              const imbR = column._imbMapR?.get(ri) || null; // affects BUY text
+              if (isPoc) {
+                // For POC, apply imbalance overrides per side; otherwise default POC blue
+                // Left (SELL)
+                ctx.textAlign = 'right';
+                if (imbL) {
+                  const col = (imbL.kind===0 ? Y : O)[Math.max(1, Math.min(3, imbL.strength||1))];
+                  ctx.font = `700 ${fs}px Segoe UI, system-ui, -apple-system, Roboto, sans-serif`;
+                  ctx.fillStyle = col; ctx.fillText(fmtQty(a), snap(midX) - pad, cy);
+                } else {
+                  ctx.font = `700 ${fs}px Segoe UI, system-ui, -apple-system, Roboto, sans-serif`;
+                  ctx.fillStyle = '#3b82f6'; ctx.fillText(fmtQty(a), snap(midX) - pad, cy);
+                }
+                // Right (BUY)
+                ctx.textAlign = 'left';
+                if (imbR) {
+                  const col = (imbR.kind===0 ? Y : O)[Math.max(1, Math.min(3, imbR.strength||1))];
+                  ctx.font = `700 ${fs}px Segoe UI, system-ui, -apple-system, Roboto, sans-serif`;
+                  ctx.fillStyle = col; ctx.fillText(fmtQty(b), snap(midX) + pad, cy);
+                } else {
+                  ctx.font = `700 ${fs}px Segoe UI, system-ui, -apple-system, Roboto, sans-serif`;
+                  ctx.fillStyle = '#3b82f6'; ctx.fillText(fmtQty(b), snap(midX) + pad, cy);
+                }
+              } else {
+                // Left side: SELL (ask) in red, intensity by aNorm
+                const leftBold = !!imbL;
+                ctx.font = `${leftBold?700:400} ${fs}px Segoe UI, system-ui, -apple-system, Roboto, sans-serif`;
+                if (imbL) {
+                  const col = (imbL.kind===0 ? Y : O)[Math.max(1, Math.min(3, imbL.strength||1))];
+                  ctx.fillStyle = col;
+                } else {
+                  const aAlpha = 0.55 + 0.45 * aNorm;
+                  ctx.fillStyle = `rgba(239,68,68,${aAlpha.toFixed(3)})`;
+                }
+                ctx.textAlign = 'right';
+                ctx.fillText(fmtQty(a), snap(midX) - pad, cy);
+                // Right side: BUY (bid) in green, intensity by bNorm
+                const rightBold = !!imbR;
+                ctx.font = `${rightBold?700:400} ${fs}px Segoe UI, system-ui, -apple-system, Roboto, sans-serif`;
+                if (imbR) {
+                  const col = (imbR.kind===0 ? Y : O)[Math.max(1, Math.min(3, imbR.strength||1))];
+                  ctx.fillStyle = col;
+                } else {
+                  const bAlpha = 0.55 + 0.45 * bNorm;
+                  ctx.fillStyle = `rgba(16,185,129,${bAlpha.toFixed(3)})`;
+                }
+                ctx.textAlign = 'left';
+                ctx.fillText(fmtQty(b), snap(midX) + pad, cy);
+              }
+            }
+            drawnCells++;
+          }
+        }
+        if (drawnCells === 0) {
+          ctx.fillStyle = 'rgba(148,163,184,0.8)';
+          ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+          ctx.fillText('No footprint cells visible. Loading/zoom mismatch? (Try Reset View)', 12, 18);
+        }
+        ctx.restore();
+      }
+
+      // Resize handling
+  const ro = new ResizeObserver(() => { chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight }); renderDOM(); renderDrawings(); pinLastBarToDomEdge(); });
+      ro.observe(chartEl);
+    // Also keep overlays laid out on resize
+    const roInfo = new ResizeObserver(() => layoutOverlays());
+    if (chartInfo) roInfo.observe(chartInfo);
+    window.addEventListener('resize', layoutOverlays);
+
+  // Initialize toolbar state
+  setTool('cursor');
+  renderDrawings();
+  layoutOverlays();
+
+  // ===== Info bar logic =====
+  function fmt(n, dp=2) { return (Number.isFinite(n) ? n.toFixed(dp) : '—'); }
+  function updateOHLCVDisplay(bar) {
+    if (!bar) return;
+    const isUp = bar.close >= bar.open;
+    const color = isUp ? '#10b981' : '#ef4444';
+    const parts = [
+      `O ${fmt(bar.open)}`,
+      `H ${fmt(bar.high)}`,
+      `L ${fmt(bar.low)}`,
+      `C ${fmt(bar.close)}`,
+      `V ${fmt(bar.volume ?? 0, 2)}`
+    ];
+    ohlcvLabel.textContent = parts.join('  ');
+    ohlcvLabel.style.color = color;
+  }
+  function updateOHLCVToLast() {
+    if (currentBars && currentBars.length) updateOHLCVDisplay(currentBars[currentBars.length-1]);
+  }
+  function updateBBOAndSpread() {
+    if (!domState || !domState.bids || !domState.asks) return;
+    // best bid = highest bid price, best ask = lowest ask price
+    let bestBid = null, bestAsk = null;
+    if (domState.bids.length) {
+      const [p, q] = domState.bids[0]; bestBid = parseFloat(p);
+    }
+    if (domState.asks.length) {
+      const [p, q] = domState.asks[0]; bestAsk = parseFloat(p);
+    }
+    if (bestBid != null) {
+      bestBidBtn.textContent = fmt(bestBid, 2);
+    }
+    if (bestAsk != null) {
+      bestAskBtn.textContent = fmt(bestAsk, 2);
+    }
+    if (bestBid != null && bestAsk != null) {
+      const spr = bestAsk - bestBid;
+      spreadLabel.textContent = `Spread ${fmt(spr, 2)}`;
+    } else {
+      spreadLabel.textContent = '—';
+    }
+  }
+  // Future: place orders on click
+  bestBidBtn?.addEventListener('click', () => { console.log('Click best bid'); /* TODO: send order */ });
+  bestAskBtn?.addEventListener('click', () => { console.log('Click best ask'); /* TODO: send order */ });
+  // Restore to last bar when cursor leaves chart area
+  chartEl.addEventListener('mouseleave', updateOHLCVToLast);
+    </script>
+  </body>
+  </html>
